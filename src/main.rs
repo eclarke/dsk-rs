@@ -3,8 +3,15 @@ extern crate bio;
 extern crate bit_vec;
 extern crate byteorder;
 extern crate vec_map;
+extern crate num_bigint;
+extern crate num_traits;
+extern crate num;
 
 use std::collections::HashMap;
+
+pub mod kmer;
+
+use kmer::kmers;
 
 use clap::{App, Arg, ArgMatches};
 use bio::alphabets;
@@ -13,6 +20,9 @@ use bio::io::fastq;
 use vec_map::VecMap;
 use byteorder::{BigEndian, WriteBytesExt};
 use bit_vec::BitVec;
+
+use num::FromPrimitive;
+use num_bigint::BigUint;
 
 fn parse_args<'a>() -> ArgMatches<'a> {
     let args = App::new("DSK in Rust")
@@ -46,8 +56,10 @@ fn main() {
     let v: usize = S.iter().map(|s| s.len() - (k as usize) + 1).sum();
     // Number of iterations
     let n_i = (((v as f64) * ((2*k) as f64).log2().ceil().exp2())/D).ceil();
+    let n_i_big: num_bigint::BigUint = FromPrimitive::from_f64(n_i).unwrap();
     // Number of partitions
     let n_p = (((v as f64)*(((2*k) as f64).log2().ceil().exp2() + 32f64))/(0.7*n_i*M)).ceil();
+    let n_p_big: num_bigint::BigUint = FromPrimitive::from_f64(n_p).unwrap();
 
     println!("k:{}, M:{}, D:{}", k, M, D);
     // println!("Max k: {}", std::usize::BITS / alphabet.len().log2());
@@ -56,45 +68,52 @@ fn main() {
     // decode_kmer(16807957669258353, k, &rank);
     // return {};
     for i in 0..(n_i as u32) {
+        let i_big = FromPrimitive::from_u32(i).unwrap();
         let mut lists = initialize_lists(n_p as usize);
         for s in &S {
             // let seq = s.as_bytes();
-            for kmer in rank.qgrams(k as u32, s) {
-                let hm = kmer as u64; //hash(&kmer);
-                if hm % (n_i as u64) == i as u64 {
-                    let j = ((hm / (n_i as u64)) % (n_p as u64)) as usize;
+            for kmer in kmers(&rank, k as u32, s) {
+                // let hm = kmer as u64; //hash(&kmer);
+                if &kmer % &n_i_big == i_big {
+                    let j_big = (&kmer / &n_i_big) % &n_p_big;
+                    let j = num::ToPrimitive::to_usize(&j_big).expect("Couldn't go down!");
                     write_kmer(kmer, &mut lists[j]);
                 }
             }
         }
         for j in 0..(n_p as usize) {
-            let mut map: HashMap<usize, u32> = HashMap::default();
+            let mut map: HashMap<&BigUint, u32> = HashMap::default();
             for kmer in &lists[j] {
-                let count = map.entry(*kmer).or_insert(0);
+                let count = map.entry(&kmer).or_insert(0);
                 *count += 1;
             }
             for (kmer, count) in map.iter() {
-                println!("{}:{}", decode_kmer(*kmer, k, &rank), count);
+                println!("{}:{}", decode_kmer(kmer, k, &rank).unwrap_or(":(".to_owned()), count);
             }
         }
     }
 
 }
 
-fn initialize_lists(n: usize) -> Vec<Vec<usize>> {
+fn initialize_lists(n: usize) -> Vec<Vec<BigUint>> {
     vec![Vec::new(); n]
 }
 
-fn write_kmer(s: usize, list: &mut Vec<usize>) {
+fn write_kmer(s: BigUint, list: &mut Vec<BigUint>) {
     list.push(s)
 }
 
-fn decode_kmer(s: usize, k: u32, rank: &alphabets::RankTransform) -> String {
+fn decode_kmer(s: &BigUint, k: u32, rank: &alphabets::RankTransform) -> Option<String> {
     let bits = (rank.ranks.len() as f32).log2().ceil() as u32;
     // let mask: usize = (1 << (k * bits)) - 1;
-    let mut v = vec![];
-    v.write_u64::<BigEndian>(s as u64).unwrap();
-    let mut b = BitVec::from_bytes(&v);
+    // let mut v = vec![];
+    // s.to_bytes_be();
+    // v.write_u64::<BigEndian>(s as u64).unwrap();
+    let mut b = BitVec::from_bytes(&s.to_bytes_be());
+    println!("{:?}", b);
+    if b.len() < (2*k as usize) {
+        return None
+    }
     let mut vk: VecMap<u8> = VecMap::new();
     for (k,v) in rank.ranks.iter() {
         vk.insert(*v as usize, k as u8);
@@ -102,10 +121,11 @@ fn decode_kmer(s: usize, k: u32, rank: &alphabets::RankTransform) -> String {
     let mut chars = Vec::new();
     for _ in 0..k {
         let mut x = BitVec::with_capacity(2);
-        x.push(b.pop().unwrap());
-        x.push(b.pop().unwrap());
-        let x = x.iter().rev().collect::<BitVec>().to_bytes().iter().nth(0).unwrap() >> (8-bits);
+        x.push(b.pop().expect("couln't get first bit"));
+        x.push(b.pop().expect("couldn't get second bit"));
+        let x = x.iter().rev().collect::<BitVec>().to_bytes().iter().nth(0).expect("uh oh") >> (8-bits);
         chars.push(*vk.get(x as usize).unwrap());
     }
-    return String::from_utf8(chars).unwrap();
+    let chars = chars.into_iter().rev().collect();
+    return Some(String::from_utf8(chars).expect("Couldn't translate to string"));
 }
