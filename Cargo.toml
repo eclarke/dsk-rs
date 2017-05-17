@@ -1,0 +1,11 @@
+[package]
+name = "dsk-rs"
+version = "0.1.0"
+authors = ["Erik Clarke <erikclarke@fastmail.com>"]
+
+[dependencies]
+clap="*"
+bio="0.13"
+bit-vec="0.4.3"
+byteorder="*"
+vec_map="*"
