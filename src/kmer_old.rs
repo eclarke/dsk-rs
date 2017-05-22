@@ -1,7 +1,7 @@
 /// Adaptation of rust-bio's kmer index for arbitrary sizes of q (or k, in this case).
 
 use num_bigint::BigUint;
-use num_traits::{Zero, One};
+use num_traits::{Zero, One, Num};
 use num::FromPrimitive;
 
 use bio::alphabets::{RankTransform};
@@ -15,6 +15,8 @@ pub struct Kmers<'a, T: TextIterator<'a>> {
     mask: BigUint,
     kmer: BigUint,
 }
+
+
 
 impl<'a, T: TextIterator<'a>> Kmers<'a, T> {
     fn kmer_push(&mut self, a: u8) {

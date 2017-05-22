@@ -6,19 +6,21 @@ extern crate vec_map;
 extern crate num_bigint;
 extern crate num_traits;
 extern crate num;
+extern crate itertools;
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{self, Read};
 
-pub mod kmer;
-
-use kmer::kmers;
+pub mod kmers;
+use kmers::KmerCounter;
+//use kmers::{Kmers, Counter};
 
 use clap::{App, Arg, ArgMatches};
-use bio::alphabets;
+use bio::alphabets::{self, RankTransform};
 use bio::io::fastq;
 
 use vec_map::VecMap;
-use byteorder::{BigEndian, WriteBytesExt};
 use bit_vec::BitVec;
 
 use num::FromPrimitive;
@@ -35,80 +37,101 @@ fn parse_args<'a>() -> ArgMatches<'a> {
 }
 
 fn main() {
-    // Pseudocode for DSK algorithm
-    let S: Vec<Vec<u8>>; // Set of sequences
-    let k: u32; // kmer size
-    let M: f64; // memory size
-    let D: f64; // disk space    
-
     let args = parse_args();
-    k = args.value_of("k").unwrap().trim().parse().unwrap();
-    M = args.value_of("M").unwrap().trim().parse::<f64>().unwrap() * 8e9;
-    D = args.value_of("D").unwrap().trim().parse::<f64>().unwrap() * 8e9;
+    // Kmer length
+    let k: u32 = args.value_of("k").unwrap().trim().parse().unwrap();
+    // Maximum memory size (in GB)
+    let max_mem = args.value_of("M").unwrap().trim().parse::<f32>().unwrap() * 8e9;
+    // Maximum disk space (in GB)
+    let max_disk = args.value_of("D").unwrap().trim().parse::<f32>().unwrap() * 8e9;
 
     let seq_fp = args.value_of("seqs").expect("No file specified!");
-    let reader = fastq::Reader::from_file(seq_fp).expect("Could not open Fastq file");
-    S = reader.records().map(|r| r.unwrap().seq().to_owned()).collect();
 
+    // Estimated number of kmers
+    let v: usize;
+    {
+        let reader = fastq::Reader::from_file(seq_fp).expect("Could not open Fastq file");
+        v = reader.records().map(|r| r.unwrap().seq().len() - (k as usize) + 1).sum()
+    }
+
+    // Kmer storage calculations
     let alphabet = alphabets::Alphabet::new(b"ATGC");
     let rank = alphabets::RankTransform::new(&alphabet);
-    // Number of k-mers
-    let v: usize = S.iter().map(|s| s.len() - (k as usize) + 1).sum();
+    let bits = (rank.ranks.len() as f32).log2().ceil() as u32;
+    // Number of bytes used to encode a k-mer
+    let bytes = bits * k;
+
     // Number of iterations
-    let n_i = (((v as f64) * ((2*k) as f64).log2().ceil().exp2())/D).ceil();
-    let n_i_big: num_bigint::BigUint = FromPrimitive::from_f64(n_i).unwrap();
+    let log2k = ((2*k) as f32).log2().ceil().exp2();
+    let iters = ((v as f32) * log2k/max_disk).ceil() as u32;
     // Number of partitions
-    let n_p = (((v as f64)*(((2*k) as f64).log2().ceil().exp2() + 32f64))/(0.7*n_i*M)).ceil();
-    let n_p_big: num_bigint::BigUint = FromPrimitive::from_f64(n_p).unwrap();
+    let parts = (((v as f32)*(log2k + 32f32))/(0.7*(iters as f32)*max_mem)).ceil() as u32;    
 
-    println!("k:{}, M:{}, D:{}", k, M, D);
-    // println!("Max k: {}", std::usize::BITS / alphabet.len().log2());
-    println!("iterations: {:.1}\npartitions: {:.1}", n_i, n_p);
+    println!("k:{}, v:{}, max mem:{}, max disk:{}", k, v, max_mem, max_disk);
+    println!("iterations: {:.1}\npartitions: {:.1}", iters, parts);
 
-    // decode_kmer(16807957669258353, k, &rank);
-    // return {};
-    for i in 0..(n_i as u32) {
-        let i_big = FromPrimitive::from_u32(i).unwrap();
-        let mut lists = initialize_lists(n_p as usize);
-        for s in &S {
-            // let seq = s.as_bytes();
-            for kmer in kmers(&rank, k as u32, s) {
-                // let hm = kmer as u64; //hash(&kmer);
-                if &kmer % &n_i_big == i_big {
-                    let j_big = (&kmer / &n_i_big) % &n_p_big;
-                    let j = num::ToPrimitive::to_usize(&j_big).expect("Couldn't go down!");
-                    write_kmer(kmer, &mut lists[j]);
-                }
-            }
+    for i in 0..(iters) {
+        write_big_kmers(k, iters, i, parts, seq_fp, &rank).expect("Error writing kmers to disk!");
+    }
+    for part in 0..parts {
+        let map = read_big_kmers(part, bytes as usize);
+        for (kmer, count) in map.iter() {
+            println!("{}:{}", decode_kmer(kmer, k, &rank).unwrap_or(":(".to_owned()), count);
         }
-        for j in 0..(n_p as usize) {
-            let mut map: HashMap<&BigUint, u32> = HashMap::default();
-            for kmer in &lists[j] {
-                let count = map.entry(&kmer).or_insert(0);
-                *count += 1;
-            }
-            for (kmer, count) in map.iter() {
-                println!("{}:{}", decode_kmer(kmer, k, &rank).unwrap_or(":(".to_owned()), count);
+    }
+}
+
+fn write_big_kmers(k: u32, 
+        iters: u32, 
+        i: u32, 
+        parts: u32, 
+        record_fp: &str, 
+        rank: &RankTransform) -> io::Result<()> {
+    let iters: num_bigint::BigUint = FromPrimitive::from_u32(iters).unwrap();
+    let i: num_bigint::BigUint = FromPrimitive::from_u32(i).unwrap();
+    let parts: num_bigint::BigUint = FromPrimitive::from_u32(parts).unwrap();
+    let reader = fastq::Reader::from_file(record_fp)?;
+    let records = reader.records();
+    for record in records {
+        let record = record?;
+        let counter = KmerCounter::for_large_k(k as usize, &alphabets::dna::n_alphabet()); //Kmers<BigUint, _> = Kmers::count_kmers(record.seq().iter(), k, rank);
+        for kmer in counter.count(record.seq().iter()) {
+            let kmer = BigUint::from_bytes_be(&kmer);
+            if &kmer % &iters == i {
+                let j_big = (&kmer / &iters) % &parts;
+                let j = num::ToPrimitive::to_usize(&j_big).unwrap();
+                save_kmer(kmer.to_bytes_be(), j);
             }
         }
     }
-
+    Ok(())
 }
 
-fn initialize_lists(n: usize) -> Vec<Vec<BigUint>> {
-    vec![Vec::new(); n]
+fn read_big_kmers(part: u32, bytes: usize) -> HashMap<BigUint, usize> {
+    let mut map: HashMap<BigUint, usize> = HashMap::new();
+    let mut reader = get_partition(part);
+    let mut buf = Vec::with_capacity(bytes);
+    while let Ok(bytes_read) = reader.read(&mut buf) {
+        if bytes_read < bytes {
+            break;
+        }
+        let kmer: BigUint = BigUint::from_bytes_be(&buf);
+        let count = map.entry(kmer).or_insert(0);
+        *count += 1;
+    }
+    return map
 }
 
-fn write_kmer(s: BigUint, list: &mut Vec<BigUint>) {
-    list.push(s)
+fn save_kmer(s: Vec<u8>, partition: usize) {
+    unimplemented!();
+}
+
+fn get_partition(partition: u32) -> io::BufReader<File> {
+    unimplemented!();
 }
 
 fn decode_kmer(s: &BigUint, k: u32, rank: &alphabets::RankTransform) -> Option<String> {
     let bits = (rank.ranks.len() as f32).log2().ceil() as u32;
-    // let mask: usize = (1 << (k * bits)) - 1;
-    // let mut v = vec![];
-    // s.to_bytes_be();
-    // v.write_u64::<BigEndian>(s as u64).unwrap();
     let mut b = BitVec::from_bytes(&s.to_bytes_be());
     println!("{:?}", b);
     if b.len() < (2*k as usize) {
@@ -129,3 +152,4 @@ fn decode_kmer(s: &BigUint, k: u32, rank: &alphabets::RankTransform) -> Option<S
     let chars = chars.into_iter().rev().collect();
     return Some(String::from_utf8(chars).expect("Couldn't translate to string"));
 }
+
