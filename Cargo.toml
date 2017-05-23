@@ -6,19 +6,7 @@ authors = ["Erik Clarke <erikclarke@fastmail.com>"]
 [dependencies]
 clap="*"
 bio="0.13"
-bit-vec="0.4.3"
-byteorder="*"
-vec_map="*"
 num="*"
-num-bigint="*"
-num-traits="*"
-itertools="*"
 error-chain="*"
-
-[lib]
-name="kmers"
-path="src/kmers.rs"
-
-[[bin]]
-name="dsk"
-path="src/dsk.rs"
+kmers = { git="https://github.com/eclarke/kmer-rs.git" }
+log="*"
