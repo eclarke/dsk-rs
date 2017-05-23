@@ -9,10 +9,24 @@
 //! let text = b"ATGCATGCATGC".into_iter();
 //! let alphabet = alphabets::dna::alphabet();
 //! let counter = KmerCounter::for_large_k(8, &alphabet);
-//! for kmer in counter.count(text) {
+//! for kmer in counter.kmers(text) {
 //!     println!("big: {}", counter.decode(kmer));
 //! }
 //! ```
+
+#![recursion_limit = "1024"]
+
+extern crate clap;
+extern crate bio;
+extern crate bit_vec;
+extern crate byteorder;
+extern crate vec_map;
+extern crate num_bigint;
+extern crate num_traits;
+extern crate num;
+extern crate itertools;
+#[macro_use] 
+extern crate error_chain;
 
 use std::marker::PhantomData;
 
@@ -28,14 +42,18 @@ use byteorder::{BigEndian, WriteBytesExt};
 
 use itertools::Itertools;
 
+pub mod errors {
+    // Create the Error, ErrorKind, ResultExt, and Result types
+    error_chain!{}
+}
+
 type Small = usize;
 type Large = BigUint;
 
 
-
-pub struct KmerCounter<KmerSize> {
+pub struct KmerCounter<K> {
     k: usize,
-    size: PhantomData<*const KmerSize>,
+    size: PhantomData<*const K>,
     ranks: RankTransform,
     bits_per_letter: usize,
     bits2char: VecMap<u8>,
@@ -78,12 +96,12 @@ impl KmerCounter<Large> {
         }
     }
 
-    pub fn count<'a, T: TextIterator<'a>>(&'a self, text: T) -> Kmers<'a, T, Large> {
-        let mut kmers = Kmers::<'a, _, Large>::new(&self, text);
+    pub fn kmers<'a, T: IntoTextIterator<'a>>(&'a self, text: T) -> Kmers<'a, T::IntoIter, Large> {
+        let mut kmers = Kmers::from_large(&self, text.into_iter());
         for _ in 0..self.k - 1 {
             kmers.next();
         }
-        kmers
+        return kmers
     }
 }
 
@@ -100,8 +118,8 @@ impl KmerCounter<Small> {
         }
     }
 
-    pub fn count<'a, T: TextIterator<'a>>(&'a self, text: T) -> Kmers<'a, T, Small> {
-        let mut kmers = Kmers::<'a, _, Small>::new(&self, text);
+    pub fn kmers<'a, T: TextIterator<'a>>(&'a self, text: T) -> Kmers<'a, T, Small> {
+        let mut kmers = Kmers::from_small(&self, text.into_iter());
         for _ in 0..self.k - 1 {
             kmers.next();
         }
@@ -109,7 +127,7 @@ impl KmerCounter<Small> {
     }
 }
 
-pub struct Kmers<'a, T, K> {
+pub struct Kmers<'a, T: TextIterator<'a>, K> {
     text: T,
     kmer: K,
     mask: K,
@@ -118,13 +136,14 @@ pub struct Kmers<'a, T, K> {
 }
 
 impl<'a, T: TextIterator<'a>> Kmers<'a, T, Large> {
-    fn new(counter: &'a KmerCounter<Large>, text: T) -> Self {
+    fn from_large(counter: &'a KmerCounter<Large>, text: T) -> Self {
         let bits_per_kmer = counter.bits_per_letter * counter.k;
+        let size: Large = BigUint::zero();
         let mask  = (BigUint::one() << bits_per_kmer) - BigUint::one();
         println!("bits per kmer: {}, mask: {:b}", bits_per_kmer, mask);
         Kmers {
             text: text.into_iter(),
-            kmer: BigUint::zero(),
+            kmer: size,
             mask,
             bits_per_letter: counter.bits_per_letter,
             ranks: &counter.ranks,
@@ -146,12 +165,12 @@ impl<'a, T: TextIterator<'a>> Kmers<'a, T, Large> {
 }
 
 impl<'a, T: TextIterator<'a>> Kmers<'a, T, Small> {
-    fn new(counter: &'a KmerCounter<Small>, text: T) -> Self {
+    fn from_small(counter: &'a KmerCounter<Small>, text: T) -> Self {
         let bits_per_kmer = counter.bits_per_letter * counter.k;
-
+        let size: Small = 0;
         Kmers {
             text: text.into_iter(),
-            kmer: 0,
+            kmer: size,
             mask: (1 << bits_per_kmer) - 1,
             bits_per_letter: counter.bits_per_letter,
             ranks: &counter.ranks,
@@ -212,7 +231,7 @@ mod tests {
         let text = b"AATTCCGGAATTCCGGN".into_iter();
         let alphabet = alphabets::dna::n_alphabet();
         let counter = KmerCounter::for_small_k(15, &alphabet);
-        let kmers = counter.count(text).map(|kmer| counter.decode(&kmer)).collect_vec();
+        let kmers = counter.kmers(text).map(|kmer| counter.decode(&kmer)).collect_vec();
         assert_eq!(kmers, vec![String::from("AATTCCGGAATTCCG"), String::from("ATTCCGGAATTCCGG"), String::from("TTCCGGAATTCCGGN")]);
     }
 
@@ -221,7 +240,7 @@ mod tests {
         let text = b"AATTCCGGAATTCCGGN".into_iter();
         let alphabet = alphabets::dna::n_alphabet();
         let counter = KmerCounter::for_large_k(16, &alphabet);
-        let kmers = counter.count(text).map(|kmer| {println!("{:?}", kmer); counter.decode(&kmer)}).collect_vec();
+        let kmers = counter.kmers(text).map(|kmer| {println!("{:?}", kmer); counter.decode(&kmer)}).collect_vec();
         assert_eq!(kmers, vec![String::from("AATTCCGGAATTCCGG"),String::from("ATTCCGGAATTCCGGN")]);
     }
 
@@ -230,7 +249,7 @@ mod tests {
         let text = b"AATTCCGGAATTCCGGN".into_iter();
         let alphabet = alphabets::dna::n_alphabet();
         let counter = KmerCounter::for_large_k(15, &alphabet);
-        let kmers = counter.count(text).map(|kmer| counter.decode(&kmer)).collect_vec();
+        let kmers = counter.kmers(text).map(|kmer| counter.decode(&kmer)).collect_vec();
         assert_eq!(kmers, vec![String::from("AATTCCGGAATTCCG"), String::from("ATTCCGGAATTCCGG"), String::from("TTCCGGAATTCCGGN")]);
     }
 }

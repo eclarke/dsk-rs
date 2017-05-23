@@ -13,3 +13,12 @@ num="*"
 num-bigint="*"
 num-traits="*"
 itertools="*"
+error-chain="*"
+
+[lib]
+name="kmers"
+path="src/kmers.rs"
+
+[[bin]]
+name="dsk"
+path="src/dsk.rs"
