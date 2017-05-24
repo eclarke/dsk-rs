@@ -1,11 +1,12 @@
 extern crate bio;
 extern crate kmers;
 extern crate clap;
-#[macro_use] extern crate error_chain;
+#[macro_use]
+extern crate error_chain;
 extern crate tempdir;
 extern crate byteorder;
 extern crate bincode;
-#[macro_use] 
+#[macro_use]
 extern crate serde_derive;
 
 extern crate serde;
@@ -108,7 +109,7 @@ fn run() -> Result<()> {
         "DNA" => bio::alphabets::Alphabet::new(b"ATGC"),
         "dna+N" => bio::alphabets::dna::n_alphabet(),
         "iupac" => bio::alphabets::dna::iupac_alphabet(),
-        _ => bail!("Invalid alphabet selection!")
+        _ => bail!("Invalid alphabet selection!"),
     };
 
     let seq_fp = args.value_of("seqs").unwrap();
@@ -119,21 +120,25 @@ fn run() -> Result<()> {
         debug!(log, "determining aggregate sequence length");
         let reader = fastq::Reader::from_file(seq_fp).chain_err(|| "couldn't open fastq file")?;
         // Bug: if k > sequence length, this breaks
-        n_kmers = reader.records().map(|r| r.expect("error parsing fastq record").seq().len() - (k as usize) + 1).sum();
+        n_kmers = reader
+            .records()
+            .map(|r| r.expect("error parsing fastq record").seq().len() - (k as usize) + 1)
+            .sum();
     }
 
-    let log2k = ((2*k) as f32).log2().ceil().exp2();
+    let log2k = ((2 * k) as f32).log2().ceil().exp2();
     // Number of iterations
-    let iters = ((n_kmers as f32) * log2k/max_disk).ceil() as usize;
+    let iters = ((n_kmers as f32) * log2k / max_disk).ceil() as usize;
     // Number of partitions
-    let parts = (((n_kmers as f32)*(log2k + 32f32))/(0.7*(iters as f32)*max_mem)).ceil() as usize;
+    let parts = (((n_kmers as f32) * (log2k + 32f32)) / (0.7 * (iters as f32) * max_mem))
+        .ceil() as usize;
     // Largest k for which we can use the small implementation
     let max_k = kmers::max_small_k(&alphabet);
     debug!(log, "program start"; "total kmers" => n_kmers, "partitions" => parts, "iterations" => iters, "max small k" => max_k);
 
     debug!(log, "creating temp files");
     let tmp_dir = TempDir::new("dsk_workspace").chain_err(|| "Couldn't create tempdir")?;
-    let mut tmpfiles: Vec<std::path::PathBuf> = Vec::new();    
+    let mut tmpfiles: Vec<std::path::PathBuf> = Vec::new();
     for p in 0..parts {
         let fp = tmp_dir.path().join(format!("kmer_bank_{}", p));
         tmpfiles.push(fp);
@@ -145,7 +150,8 @@ fn run() -> Result<()> {
         let counter = KmerCounter::for_small_k(k, &alphabet)?;
         debug!(log, "kmer size"; "bytes" => counter.bytes_per_kmer);
         for i in 0..iters {
-            let reader = fastq::Reader::from_file(seq_fp).chain_err(|| "Couldn't open fastq file for reading")?;
+            let reader = fastq::Reader::from_file(seq_fp)
+                .chain_err(|| "Couldn't open fastq file for reading")?;
             let records = reader.records();
             for record in records {
                 let record = record?;
@@ -156,7 +162,8 @@ fn run() -> Result<()> {
                     if ukmer % iters == i {
                         let part = (ukmer / iters) % parts;
                         let mut file = &mut writers[part];
-                        file.write(&kmer).chain_err(|| "couldn't serialize kmer")?;
+                        file.write(&kmer)
+                            .chain_err(|| "couldn't serialize kmer")?;
                     }
                 }
             }
@@ -196,8 +203,7 @@ fn run() -> Result<()> {
 fn create_writers(paths: &Vec<std::path::PathBuf>, bufsize: usize) -> Result<Vec<BufWriter<File>>> {
     let mut writers = Vec::with_capacity(paths.len());
     for path in paths {
-        let file = OpenOptions::new()
-            .read(true)
+        let file = OpenOptions::new().read(true)
             .write(true)
             .create(true)
             .open(path)
@@ -210,8 +216,7 @@ fn create_writers(paths: &Vec<std::path::PathBuf>, bufsize: usize) -> Result<Vec
 fn create_readers(paths: &Vec<std::path::PathBuf>, bufsize: usize) -> Result<Vec<BufReader<File>>> {
     let mut readers = Vec::with_capacity(paths.len());
     for path in paths {
-        let file = OpenOptions::new()
-            .read(true)
+        let file = OpenOptions::new().read(true)
             .write(true)
             .create(true)
             .open(path)
@@ -220,4 +225,3 @@ fn create_readers(paths: &Vec<std::path::PathBuf>, bufsize: usize) -> Result<Vec
     }
     Ok(readers)
 }
-
