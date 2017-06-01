@@ -4,7 +4,6 @@ version = "0.2.0"
 authors = ["Erik Clarke <erikclarke@fastmail.com>"]
 
 [dependencies]
-clap="*"
 bio="0.13"
 num="*"
 error-chain="*"
@@ -21,6 +20,10 @@ serde_derive="*"
 num-bigint="0.1.37"
 num-traits="0.1.37"
 dsk="*"
+
+[dependencies.clap]
+version = "~2.24.2"
+features = ["yaml"]
 
 [[bin]]
 name="dsk"

@@ -1,7 +1,7 @@
 extern crate kmers;
-extern crate clap;
 extern crate dsk;
 extern crate env_logger;
+#[macro_use] extern crate clap;
 #[macro_use] extern crate log;
 #[macro_use] extern crate error_chain;
 
@@ -37,56 +37,18 @@ fn main() {
     }
 }
 
-fn parse_args<'a>() -> ArgMatches<'a> {
-    let args = App::new("DSK in Rust")
-        .arg(Arg::with_name("input")
-                 .takes_value(true)
-                 .required(true)
-                 .index(1))
-        .arg(Arg::with_name("k")
-                 .help("Length of kmers to count")
-                 .short("k")
-                 .takes_value(true)
-                 .default_value("27"))
-        .arg(Arg::with_name("max_mem")
-                 .help("Max RAM to use (in GB)")
-                 .short("m")
-                 .long("max_mem")
-                 .takes_value(true)
-                 .default_value("2"))
-        .arg(Arg::with_name("max_disk")
-                 .help("Max disk space to use (in GB)")
-                 .short("d")
-                 .long("max_disk")
-                 .takes_value(true)
-                 .default_value("3"))
-        .arg(Arg::with_name("fastq")
-                .help("Input is in FASTQ format (default: FASTA)")
-                .short("q")
-                .long("fastq")
-                .takes_value(false))
-        .arg(Arg::with_name("alphabet")
-            .help("Nucleotide alphabet to use.\nDNA = ATGC; dna = ATGCatgc; dna+n = ATGCNatgcn; iupac = all IUPAC nucleotide symbols.\nUse the smallest applicable for your sequences; large alphabets slow down counting.\n")
-            .short("a").long("alphabet")
-            .possible_values(&["dna", "DNA", "dna+N", "iupac"])
-            .takes_value(true)
-            .default_value("DNA"))
-        .get_matches();
-    return args;
-}
-
 fn run() -> Result<()> {
-
-    let args = parse_args();
+    let yaml = load_yaml!("cli.yml");
+    let args = App::from_yaml(yaml).get_matches();
     let app = dsk::App::new(args)?;
     info!("\
 Starting DSK with parameters: 
-\t k:          {}
-\t input:      {}
-\t input fmt:  {:?}
-\t iterations: {}
-\t partitions: {}
-\t workspace:  {:?}",
+\tk:          {}
+\tinput:      {}
+\tinput fmt:  {:?}
+\titerations: {}
+\tpartitions: {}
+\tworkspace:  {:?}",
     app.k, app.input, app.format, app.iters, app.parts, app.workspace.path()
 );
 
