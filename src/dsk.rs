@@ -1,3 +1,18 @@
+extern crate bio;
+extern crate kmers;
+extern crate clap;
+extern crate tempdir;
+extern crate byteorder;
+extern crate bincode;
+extern crate num;
+extern crate num_bigint;
+extern crate num_traits;
+extern crate fastx;
+extern crate env_logger;
+
+#[macro_use] extern crate log;
+#[macro_use] extern crate error_chain;
+
 use std::path::{Path, PathBuf};
 use std::fs::File;
 use std::io::{BufWriter, BufReader, Write, Read};
@@ -16,7 +31,7 @@ use fastx::Records;
 use bincode::{serialize_into, Infinite};
 
 #[derive(Debug, Copy, Clone)]
-enum SequenceFormat {
+pub enum SequenceFormat {
     Fasta,
     Fastq,
 }
@@ -42,26 +57,28 @@ use self::errors::*;
 
 pub struct App {
     pub k: usize,
-    seqs: String,
-    format: SequenceFormat,
-    iters: usize,
-    parts: usize,
-    alphabet: Alphabet,
+    pub input: String,
+    pub format: SequenceFormat,
+    pub iters: usize,
+    pub parts: usize,
+    pub alphabet: Alphabet,
+    pub workspace: TempDir,
     tempfiles: Vec<PathBuf>
 }
 
 impl fmt::Display for App {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DSK (k: {}; input: {}):\n\titerations: {}; partitions: {}; alphabet size: {}",
-            self.k, self.seqs, self.iters, self.parts, self.alphabet.len()
+        write!(f, "DSK: k:{}\tinput:{}\titerations:{}\tpartitions:{}\talphabet size:{}",
+            self.k, self.input, self.iters, self.parts, self.alphabet.len()
         )
     }
 }
 
 impl App {
     pub fn new(args: ArgMatches) -> Result<Self> {
+        info!("Starting logging");
         let k: usize = args.value_of("k").unwrap().trim().parse()?;
-        let seqs = args.value_of("seqs").unwrap();
+        let input = args.value_of("input").unwrap();
         let format = match args.is_present("fastq") {
             true => SequenceFormat::Fastq,
             false => SequenceFormat::Fasta
@@ -79,11 +96,11 @@ impl App {
             .trim()
             .parse::<f32>()? * 8e9;
 
-        println!("starting sequence counting");
-        let n_kmers: isize = records(seqs, format)?
+        debug!("Determining total number of kmers...");
+        let n_kmers: isize = records(input, format)?
             .map(|r| (r.seq.len() as isize) - (k as isize) + 1)
             .filter(|x| *x > 0).sum();
-
+        debug!("Total kmers: {}", n_kmers);
         let log2k = ((2 * k) as f32).log2().ceil().exp2();
 
         // Number of iterations
@@ -100,10 +117,10 @@ impl App {
             _ => bail!("Invalid alphabet selection!"),
         };
 
-        let tempfiles = tempfiles(parts)?;
+        let (tempdir, tempfiles) = tempfiles(parts)?;
 
         Ok(App {
-            k, seqs: String::from(seqs), format, iters, parts, alphabet, tempfiles
+            k, input: String::from(input), format, iters, parts, alphabet, tempfiles, workspace: tempdir
         })
     }
 
@@ -113,10 +130,6 @@ impl App {
 
     pub fn iters(&self) -> usize {
         self.iters
-    }
-
-    pub fn bigiters(&self) -> BigUint {
-        BigUint::from(self.iters as usize)
     }
 
     pub fn writers(&self) -> Result<Vec<BufWriter<File>>> {
@@ -144,7 +157,8 @@ impl App {
         let counter = KmerCounter::for_small_k(self.k, self.alphabet())?;
         let mut writers = self.writers()?;
         for i in 0..self.iters {
-            let records = records(&self.seqs, self.format)?;
+            debug!("Writing kmers to disk (iteration {}/{})", i+1, self.iters);
+            let records = records(&self.input, self.format)?;
             for record in records {
                 for (bytes, kmer) in counter.kmers(record.seq.iter()) {
                     if kmer % self.iters == i {
@@ -163,7 +177,8 @@ impl App {
         let mut writers = self.writers()?;
         let big_iters = self.iters.to_biguint().unwrap();
         for i in 0..self.iters {
-            let records = records(&self.seqs, self.format)?;
+            debug!("Writing kmers to disk (iteration {}/{})", i+1, self.iters);
+            let records = records(&self.input, self.format)?;
             for record in records {
                 for (bytes, kmer) in counter.kmers(record.seq.iter()) {
                     if &kmer % &big_iters == i.to_biguint().unwrap() {
@@ -196,7 +211,7 @@ impl App {
         }
 
         serialize_into(&mut outfile, &mut map, Infinite).map_err(|e| *e)
-            .chain_err(|| "Error writing results to outfile")?;
+            .chain_err(|| "error writing results to outfile")?;
 
         Ok(())
     }
@@ -204,18 +219,18 @@ impl App {
 }
 
 
-fn tempfiles(n: usize) -> Result<Vec<PathBuf>> {
-    let tempdir = TempDir::new("dsk_workspace").chain_err(|| "Couldn't create tempdir")?;
+fn tempfiles(n: usize) -> Result<(TempDir, Vec<PathBuf>)> {
+    let tempdir = TempDir::new("dsk_workspace").chain_err(|| "couldn't create tempdir")?;
     let mut tempfiles: Vec<PathBuf> = Vec::new();
     for p in 0..n {
         let fp = tempdir.path().join(format!("kmer_bank_{}", p));
         tempfiles.push(fp);
     }
-    Ok(tempfiles)
+    Ok((tempdir, tempfiles))
 }
 
 fn records<P: AsRef<Path>>(path: P, format: SequenceFormat) -> Result<Records<BufReader<File>>> {
-    let reader = BufReader::new(File::open(path).chain_err(|| "Couldn't open sequence file")?);
+    let reader = BufReader::new(File::open(path).chain_err(|| "couldn't open sequence file")?);
     match format {
         SequenceFormat::Fasta => Ok(Records::from_fasta(reader)),
         SequenceFormat::Fastq => Ok(Records::from_fastq(reader))
