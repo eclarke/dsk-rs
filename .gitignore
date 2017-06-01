@@ -2,3 +2,5 @@ target/
 **/*.rs.bk
 rls.toml
 *.fq
+*.lock
+kmers.bc
