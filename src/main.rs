@@ -47,36 +47,30 @@ fn run() -> Result<()> {
     let yaml = load_yaml!("cli.yml");
     let args = App::from_yaml(yaml).get_matches();
     let app = dsk::App::new(args, log.new(o!()))?;
-    info!(log, "DSK started"; "k"=>&app.k, "input"=>&app.input);
-//     info!("\
-// Starting DSK with parameters: 
-// \tk:          {}
-// \tinput:      {}
-// \tinput fmt:  {:?}
-// \titerations: {}
-// \tpartitions: {}
-// \tworkspace:  {:?}",
-//     app.k, app.input, app.format, app.iters, app.parts, app.workspace.path()
-// );
+    info!(log, "DSK started"; "k"=>&app.k, "input"=>&app.input, "iterations"=>&app.iters, "partitions"=>&app.parts);
 
     let max_k = kmers::max_small_k(app.alphabet());
+    let mut writers = app.writers()?;
     if app.k <= max_k {
-        info!(log, "Writing small kmers to disk");
-        let counter = app.write_small_kmers()?;
+        info!(log, "Using small kmer counter");
+        let counter = KmerCounter::for_small_k(app.k, app.alphabet())?;
+        for i in 0..app.iters {
+            app.write_small_kmers(i, counter, &mut writers);
+        }
         info!(log, "Counting kmers");
         let map = app.count_kmers(&counter)?;
         info!(log, "Writing map to disk");
         app.write_map(map)?
     } else {
-        info!(log, "Writing large kmers to disk");
+        info!(log, "Using large kmer counter");
         let counter = app.write_large_kmers()?;
         info!(log, "Counting kmers");
         let map = app.count_kmers(&counter)?;
         info!(log, "Writing map to disk");
         app.write_map(map)?
     }
-    info!(log, "Finished");
 
+    info!(log, "Finished");
     Ok(())
 }
 

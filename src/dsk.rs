@@ -172,23 +172,20 @@ impl App {
     }
 
 
-    pub fn write_small_kmers(&self) -> Result<KmerCounter<usize>> {
-        let counter = KmerCounter::for_small_k(self.k, self.alphabet())?;
-        let mut writers = self.writers()?;
-        for i in 0..self.iters {
-            debug!(self.log, "Writing kmers to disk"; "iteration"=>i+1);
-            let records = records(&self.input, self.format)?;
-            for record in records {
-                for (bytes, kmer) in counter.kmers(record.seq.iter()) {
-                    if kmer % self.iters == i {
-                        let part = (kmer / self.iters) % self.parts;
-                        let mut file = &mut writers[part];
-                        file.write(&bytes).chain_err(|| "problem writing kmer to file")?;
-                    }
+
+    pub fn write_small_kmers(&self, iteration: usize, counter: KmerCounter<usize>, writers: &mut Vec<BufWriter<File>>) -> Result<()> {
+        info!(self.log, "Writing kmers to disk"; "iteration"=>iteration+1);
+        let records = records(&self.input, self.format)?;
+        for record in records {
+            for (bytes, kmer) in counter.kmers(record.seq.iter()) {
+                if kmer % self.iters == iteration {
+                    let part = (kmer / self.iters) % self.parts;
+                    let mut file = &mut writers[part];
+                    file.write(&bytes).chain_err(|| "problem writing kmer to file")?;
                 }
             }
         }
-        Ok(counter)
+        Ok(())
     }
 
     pub fn write_large_kmers(&self) -> Result<KmerCounter<BigUint>> {
@@ -196,7 +193,7 @@ impl App {
         let mut writers = self.writers()?;
         let big_iters = self.iters.to_biguint().unwrap();
         for i in 0..self.iters {
-            debug!(self.log, "Writing kmers to disk"; "iteration"=>i+1);
+            info!(self.log, "Writing kmers to disk"; "iteration"=>i+1);
             let records = records(&self.input, self.format)?;
             for record in records {
                 for (bytes, kmer) in counter.kmers(record.seq.iter()) {
