@@ -29,6 +29,12 @@ args:
         help: "input is in FASTQ format (default: FASTA)"
         short: q
         long: fastq
+    - outfile:
+        help: output file
+        short: o
+        long: out
+        takes_value: true
+        default_value: "kmers.bc"
     - alphabet:
         help: "Nucleotide alphabet to use.\nDNA = ATGC; dna = ATGCatgc; dna+n = ATGCNatgcn; iupac = all IUPAC nucleotide symbols.\nUse the smallest applicable for your sequences; large alphabets slow down counting.\n"
         short: a

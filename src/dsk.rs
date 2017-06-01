@@ -8,9 +8,9 @@ extern crate num;
 extern crate num_bigint;
 extern crate num_traits;
 extern crate fastx;
-extern crate env_logger;
+extern crate slog_stdlog;
 
-#[macro_use] extern crate log;
+#[macro_use] extern crate slog;
 #[macro_use] extern crate error_chain;
 
 use std::path::{Path, PathBuf};
@@ -18,6 +18,8 @@ use std::fs::File;
 use std::io::{BufWriter, BufReader, Write, Read};
 use std::fmt;
 use std::collections::HashMap;
+
+use slog::Drain;
 
 use bio::alphabets::{dna, Alphabet};
 use clap::ArgMatches;
@@ -63,7 +65,9 @@ pub struct App {
     pub parts: usize,
     pub alphabet: Alphabet,
     pub workspace: TempDir,
-    tempfiles: Vec<PathBuf>
+    pub output: String,
+    tempfiles: Vec<PathBuf>,
+    log: slog::Logger,
 }
 
 impl fmt::Display for App {
@@ -75,8 +79,8 @@ impl fmt::Display for App {
 }
 
 impl App {
-    pub fn new(args: ArgMatches) -> Result<Self> {
-        info!("Starting logging");
+    pub fn new<L: Into<Option<slog::Logger>>>(args: ArgMatches, logger: L) -> Result<Self> {
+        let log = logger.into().unwrap_or(slog::Logger::root(slog_stdlog::StdLog.fuse(), o!()));
         let k: usize = args.value_of("k").unwrap().trim().parse()?;
         let input = args.value_of("input").unwrap();
         let format = match args.is_present("fastq") {
@@ -96,11 +100,11 @@ impl App {
             .trim()
             .parse::<f32>()? * 8e9;
 
-        debug!("Determining total number of kmers...");
+        debug!(log, "Determining total number of kmers...");
         let n_kmers: isize = records(input, format)?
             .map(|r| (r.seq.len() as isize) - (k as isize) + 1)
             .filter(|x| *x > 0).sum();
-        debug!("Total kmers: {}", n_kmers);
+        debug!(log, ""; "kmers"=>n_kmers);
         let log2k = ((2 * k) as f32).log2().ceil().exp2();
 
         // Number of iterations
@@ -119,8 +123,23 @@ impl App {
 
         let (tempdir, tempfiles) = tempfiles(parts)?;
 
+        let outfile = args.value_of("outfile").unwrap();
+        {
+            // Check that we can create a writeable file at target location
+            File::create(outfile).chain_err(|| format!("Couldn't create output file {}", outfile))?;
+        }
+
         Ok(App {
-            k, input: String::from(input), format, iters, parts, alphabet, tempfiles, workspace: tempdir
+            k, 
+            input: String::from(input), 
+            format, 
+            iters, 
+            parts, 
+            alphabet, 
+            tempfiles, 
+            workspace: tempdir, 
+            log, 
+            output: String::from(outfile),
         })
     }
 
@@ -157,7 +176,7 @@ impl App {
         let counter = KmerCounter::for_small_k(self.k, self.alphabet())?;
         let mut writers = self.writers()?;
         for i in 0..self.iters {
-            debug!("Writing kmers to disk (iteration {}/{})", i+1, self.iters);
+            debug!(self.log, "Writing kmers to disk"; "iteration"=>i+1);
             let records = records(&self.input, self.format)?;
             for record in records {
                 for (bytes, kmer) in counter.kmers(record.seq.iter()) {
@@ -177,7 +196,7 @@ impl App {
         let mut writers = self.writers()?;
         let big_iters = self.iters.to_biguint().unwrap();
         for i in 0..self.iters {
-            debug!("Writing kmers to disk (iteration {}/{})", i+1, self.iters);
+            debug!(self.log, "Writing kmers to disk"; "iteration"=>i+1);
             let records = records(&self.input, self.format)?;
             for record in records {
                 for (bytes, kmer) in counter.kmers(record.seq.iter()) {
@@ -193,10 +212,9 @@ impl App {
         Ok(counter)
     }
 
-    pub fn count_kmers<K>(&self, counter: &KmerCounter<K>) -> Result<()> {
+    pub fn count_kmers<K>(&self, counter: &KmerCounter<K>) -> Result<HashMap<Vec<u8>, usize>> {
         let mut readers = self.readers()?;
         let mut map: HashMap<Vec<u8>, usize> = HashMap::new();
-        let mut outfile = File::create("out.map")?;
 
         for part in 0..self.parts {
             let infile = &mut readers[part];
@@ -209,10 +227,13 @@ impl App {
                 *count += 1;
             }
         }
+        Ok(map)
+    }
 
-        serialize_into(&mut outfile, &mut map, Infinite).map_err(|e| *e)
+    pub fn write_map(&self, map: HashMap<Vec<u8>, usize>) -> Result<()> {
+        let mut outfile = File::create(&self.output)?;
+        serialize_into(&mut outfile, &map, Infinite).map_err(|e| *e)
             .chain_err(|| "error writing results to outfile")?;
-
         Ok(())
     }
     
